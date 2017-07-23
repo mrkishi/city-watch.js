@@ -10,7 +10,7 @@ const CityWatch = require('.')
 
 const help = `
 Usage:
-	./example <username> <password>
+	./example <email> <password>
 
 Fetches the most up-to-date user information from Torn's City Watch API
 `
@@ -27,28 +27,35 @@ const delay = 5
 const account = new CityWatch.Account(username, password)
 const monitor = new CityWatch.Monitor(account)
 
-const json = (object) => JSON.stringify(object, null, '\t')
-const wait = (msec) => new Promise((resolve) => setTimeout(resolve, msec))
+const format = (object) => JSON.stringify(object, null, '\t')
+const sleep = (msec) => new Promise((resolve) => setTimeout(resolve, msec))
 
-// In reality, you probably wouldn't use promises and arrow functions this way.
-// In this quick example, it's a hacky approach to ensure everything happens
-// sequentially without the introduction of named functions
+const example = async function () {
 
-Promise.resolve()
-	.then(() => console.log(`Getting login url...`))
-	.then(() => monitor.getLaunchURL())
-	.then((url) => console.log(`Login url: ${ url }`))
+	try {
+		console.log(`Getting login url...`)
+		const url = await monitor.getLaunchURL()
+		console.log(`Login url: ${ url }`)
 
-	.then(() => console.log(`Getting status...`))
-	.then(() => monitor.getStatus())
-	.then((status) => console.log(`Status for "${ status.playername }": ${ json(status) }`))
+		console.log(`Getting status...`)
+		const status = await monitor.getStatus()
+		console.log(`Status for "${ status.playername }": ${ format(status) }`)
 
-	.then(() => console.log(`Waiting ${ delay } seconds...`))
-	.then(() => wait(delay * 1000))
+		console.log(`Waiting ${ delay } seconds...`)
+		await sleep(delay * 1000)
 
-	.then(() => console.log(`Getting status...`))
-	.then(() => monitor.getStatus())
-	.then((status) => console.log(`Status ${ status.nochange ?
-		'not yet changed!' : `already changed: ${ json(status) }` }`))
+		console.log(`Getting status...`)
+		const update = await monitor.getStatus()
 
-	.catch((error) => console.error(error))
+		if (update.nochange) {
+			console.log(`Status not yet changed!`)
+		} else {
+			console.log(`Status already changed: ${ format(update) }`)
+		}
+	} catch (error) {
+		console.error(error)
+	}
+
+}
+
+example()

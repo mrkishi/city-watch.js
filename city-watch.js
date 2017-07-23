@@ -29,9 +29,8 @@ class Account {
 
 class Endpoint {
 
-	constructor({ https = false, urls = CityWatch.endpoints.production.urls, ttl = 1800 } = {}) {
+	constructor({ urls = CityWatch.endpoints.production.urls, ttl = 1800 } = {}) {
 
-		this.protocol = https ? 'https://' : 'http://'
 		this.urls = urls
 		this.ttl = ttl
 
@@ -40,32 +39,24 @@ class Endpoint {
 
 	}
 
-	get base()   { return this.protocol + this.urls.domain }
-	get api()    { return this.protocol + this.urls.api    }
-	get time()   { return this.protocol + this.urls.time   }
-	get launch() { return this.protocol + this.urls.launch }
+	async getTime() {
 
-	getTime() {
-
-		const deltaSec = (Date.now() - this.lastTimeLocalMsec) / 1000 |0
+		const deltaSec = Math.ceil((Date.now() - this.lastTimeLocalMsec) / 1000)
 
 		if (deltaSec < this.ttl) {
 
 			// Cache server time for the ttl, avoiding a round-trip
-			return Promise.resolve(this.lastTimeServerSec + deltaSec)
+			return this.lastTimeServerSec + deltaSec
 
 		} else {
 
-			return fetch(this.time)
-				.then((response) => response.text())
-				.then((time) => {
+			const response = await fetch(this.urls.time)
+			const time = await response.text()
 
-					this.lastTimeServerSec = parseInt(time, 10)
-					this.lastTimeLocalMsec = Date.now()
+			this.lastTimeServerSec = parseInt(time, 10)
+			this.lastTimeLocalMsec = Date.now()
 
-					return this.lastTimeServerSec
-
-				})
+			return this.lastTimeServerSec
 
 		}
 
@@ -85,104 +76,94 @@ class Monitor {
 
 	}
 
-	request(type) {
+	async request(type) {
 
 		const lastResult = this.lastResults[type] || {}
 
-		return this.endpoint.getTime()
-			.then((time) => {
+		const time = await this.endpoint.getTime()
 
-				const headers = {
-					'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-				}
+		const headers = {
+			'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+		}
 
-				const data = {
-					version: CityWatch.API_VERSION,
-					os: this.account.os,
-					request: type,
-					username: this.account.username,
-					time: time,
-					hashutp: CityWatch.hash.utp(this.account.username, time, this.account.password),
-					lastchecksum: lastResult.checksum,
-				}
+		const data = {
+			version: CityWatch.API_VERSION,
+			os: this.account.os,
+			request: type,
+			username: this.account.username,
+			time: time,
+			hashutp: CityWatch.hash.utp(this.account.username, time, this.account.password),
+			lastchecksum: lastResult.checksum,
+		}
 
-				return fetch(this.endpoint.api, {
-					method: 'POST',
-					headers: headers,
-					body: qs.stringify(data),
-				})
+		const response = await fetch(this.endpoint.urls.api, {
+			method: 'POST',
+			headers: headers,
+			body: qs.stringify(data),
+		})
 
-			})
-			.then((response) => response.text())
-			.then((text) => {
+		let result
 
-				let result
+		try {
+			result = await response.json()
+		} catch (err) {
+			result = {
+				success: false,
+				error_text: err.toString(),
+			}
+		}
 
-				try {
-					result = JSON.parse(text)
-				} catch (err) {
-					result = {
-						success: false,
-						error_text: text,
-					}
-				}
+		if (result.success !== true) {
 
-				if (result.success !== true) {
+			this.lastErrors[type] = result.error_text
+			throw new Error(result.error_text)
 
-					this.lastErrors[type] = result.error_text
-					throw new Error(result.error_text)
+		} else if (result.nochange) {
 
-				} else if (result.nochange) {
+			lastResult.nochange = result.nochange
+			result = lastResult
 
-					lastResult.nochange = result.nochange
-					result = lastResult
+		}
 
-				}
+		result.local_time = Date.now()
 
-				result.local_time = Date.now()
+		this.lastErrors[type] = null
+		this.lastResults[type] = result
 
-				this.lastErrors[type] = null
-				this.lastResults[type] = result
-
-				return result
-
-			})
+		return result
 
 	}
 
-	getStatus() {
+	async getStatus() {
 
 		return this.request(CityWatch.REQUEST_TYPES.GET_USER_INFO)
 
 	}
 
-	getLaunchURL(redirect = undefined, id = undefined) {
+	async getLaunchURL(redirect, id) {
 
-		return this.endpoint.getTime()
-			.then((time) => {
+		const time = await this.endpoint.getTime()
 
-				const query = {
-					version: CityWatch.API_VERSION,
-					username: this.account.username,
-					time: time,
-					hashutp: CityWatch.hash.utp(this.account.username, time, this.account.password),
-					redirect: redirect,
-					id: id,
-				}
+		const query = {
+			version: CityWatch.API_VERSION,
+			username: this.account.username,
+			time: time,
+			hashutp: CityWatch.hash.utp(this.account.username, time, this.account.password),
+			redirect: redirect,
+			id: id,
+		}
 
-				return this.endpoint.launch + '?' + qs.stringify(query)
-
-			})
+		return this.endpoint.urls.launch + '?' + qs.stringify(query)
 
 	}
 
-	getMessageURL(id = undefined) {
+	async getMessageURL(id) {
 
 		return this.getLaunchURL('messages', id)
 
 	}
 
-	getEventURL(id = undefined) {
+	async getEventURL(id) {
 
 		return this.getLaunchURL('events', id)
 
@@ -205,28 +186,28 @@ const CityWatch = module.exports = {
 
 		production: new Endpoint({
 			urls: {
-				domain: 'www.torn.com',
-				api:    'www.torn.com/citywatch/api.php',
-				time:   'www.torn.com/citywatch/time.php',
-				launch: 'www.torn.com/citywatch-auth.php',
+				base:   'https://www.torn.com/',
+				api:    'https://www.torn.com/citywatch/api.php',
+				time:   'https://www.torn.com/citywatch/time.php',
+				launch: 'https://www.torn.com/citywatch-auth.php',
 			}
 		}),
 
 		development: new Endpoint({
 			urls: {
-				domain: 'dev-www.torn.com',
-				api:    'dev-www.torn.com/citywatch/api.php',
-				time:   'dev-www.torn.com/citywatch/time.php',
-				launch: 'dev-www.torn.com/citywatch-auth.php',
+				base:   'https://dev-www.torn.com/',
+				api:    'https://dev-www.torn.com/citywatch/api.php',
+				time:   'https://dev-www.torn.com/citywatch/time.php',
+				launch: 'https://dev-www.torn.com/citywatch-auth.php',
 			}
 		}),
 
 		debug: new Endpoint({
 			urls: {
-				domain: 'files.jamesgooding.co.uk',
-				api:    'files.jamesgooding.co.uk/torn/info.php',
-				time:   'files.jamesgooding.co.uk/torn/time.php',
-				launch: 'files.jamesgooding.co.uk/torn/auth.php',
+				base:   'https://files.jamesgooding.co.uk/',
+				api:    'https://files.jamesgooding.co.uk/torn/info.php',
+				time:   'https://files.jamesgooding.co.uk/torn/time.php',
+				launch: 'https://files.jamesgooding.co.uk/torn/auth.php',
 			}
 		}),
 
